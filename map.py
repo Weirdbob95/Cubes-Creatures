@@ -25,61 +25,16 @@ class Map(object):
         self.solid = pnoise(*np.meshgrid(*map(np.arange, self.size)))
         print time.clock() - t
 
-        self.lowest_air = np.apply_along_axis(lambda a: np.nonzero(a)[0][0], 2, self.solid == 0)
-        self.highest_cube = np.apply_along_axis(lambda a: np.nonzero(a)[0][-1], 2, self.solid)
-        print time.clock() - t
-        #
-        # t = time.clock()
-        # for pos in multi_range(self.size):
-        #     # if pos[0] % 10 + pos[1] + pos[2] == 0:
-        #     #     print pos[0]
-        #     if perlin(-1, pos[0] / land_scale, pos[1] / land_scale, pos[2] / land_scale, octaves=4) \
-        #             > pos[2] / 100. - 1:
-        #         self.solid[pos] = True
-        # print time.clock() - t
-        #
-        # t = time.clock()
-        # for pos in multi_range(self.size):
-        #     # if pos[0] % 10 + pos[1] + pos[2] == 0:
-        #     #     print pos[0]
-        #     if perlin(-1, pos[0] / land_scale, pos[1] / land_scale, pos[2] / land_scale, octaves=4) \
-        #             > pos[2] / 100. - 1:
-        #         self.solid[pos] = True
-        #         if self.lowest_air[pos[:2]] == pos[2]:
-        #             self.lowest_air[pos[:2]] = pos[2] + 1
-        #         self.highest_cube[pos[:2]] = pos[2]
-        # print time.clock() - t
-
         print 'Coloring terrain'
 
         t = time.clock()
         self.visible = []
-        for x, y in multi_range((1, 1), (self.size[0] - 1, self.size[1] - 1)):
-            if x % 10 + y == 0:
-                print x
-            lowest_cube = min(self.lowest_air[x, y] - 1,
-                              self.lowest_air[x - 1, y], self.lowest_air[x + 1, y],
-                              self.lowest_air[x, y - 1], self.lowest_air[x, y + 1])
-            for z in xrange(lowest_cube, self.highest_cube[x, y] + 1):
-                pos = np.asarray((x, y, z))
-                if self.is_solid_fast(pos):
-                    for v in (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1):
-                        if not self.is_solid(pos + v):
-                            col = (perlin(0, *pos / color_scale, octaves=4) / 2 + .5,
-                                   perlin(1, *pos / color_scale, octaves=4) / 2 + .5,
-                                   perlin(2, *pos / color_scale, octaves=4) / 2 + .5)
-                            self.visible.append((pos, col))
-                            break
-        print time.clock() - t
-
-        t = time.clock()
-        self.visible = []
-        neighbors = scipy.ndimage.convolve(np.int_(self.solid), np.array((
+        num_neighbors = scipy.ndimage.convolve(np.int_(self.solid), np.array((
             ((0, 0, 0), (0, 1, 0), (0, 0, 0)),
             ((0, 1, 0), (1, 0, 1), (0, 1, 0)),
             ((0, 0, 0), (0, 1, 0), (0, 0, 0))
         )), mode='constant', cval=10)
-        interesting = (0 < neighbors) & (6 > neighbors) & self.solid
+        interesting = self.solid & (num_neighbors < 6)
         for pos in np.transpose(np.nonzero(interesting)):
             col = (perlin(0, *pos / color_scale, octaves=4) / 2 + .5,
                    perlin(1, *pos / color_scale, octaves=4) / 2 + .5,
@@ -104,12 +59,15 @@ class Map(object):
         if self.display_list is None:
 
             print 'Computing visible cube faces'
+            t = time.clock()
             gl_commands = []
             for pos, col in self.visible:
                 gl_commands.append(('glColor', col))
                 gl_commands += self.draw_cube(pos)
+            print time.clock() - t
 
             print 'Creating display list'
+            t = time.clock()
             self.display_list = glGenLists(1)
 
             glNewList(self.display_list, GL_COMPILE)
@@ -125,6 +83,7 @@ class Map(object):
 
             glEnd()
             glEndList()
+            print time.clock() - t
             print 'Done'
 
         glCallList(self.display_list)
