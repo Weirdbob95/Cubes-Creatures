@@ -1,11 +1,13 @@
 from math import *
+import sys
 
 import pygame
 from OpenGL.GL import *
 from OpenGL.GLU import *
 from pygame.locals import *
 
-from map import Map
+import world
+from world import World
 from util import *
 
 SCREEN_SIZE = (1200, 800)
@@ -38,15 +40,15 @@ clock = pygame.time.Clock()
 # glMaterial(GL_FRONT, GL_DIFFUSE, (1.0, 1.0, 1.0, 1.0))
 
 # This object renders the 'map'
-game_map = Map()
+game_world = World()
 
 # Starting player pos
-position = np.array(game_map.size) / (2.0, 2.0, .5)
-velocity = np.array((0.0, 0.0, 0.0))
-gravity = np.array((0.0, 0.0, -20.0))
+position = vec(0.0, 0.0, world.land_height)
+velocity = vec(0.0, 0.0, 0.0)
+gravity = vec(0.0, 0.0, -20.0)
 
-facing = np.array((0.0, 0.0))
-forwards = np.array((1.0, 0.0, 0.0))
+facing = vec(0.0, 0.0)
+forwards = vec(1.0, 0.0, 0.0)
 
 pygame.mouse.set_visible(False)
 
@@ -80,6 +82,10 @@ while running:
             glDisable(GL_LIGHTING)
         if event.type == KEYUP and event.key == K_p:
             print position
+        if event.type == KEYUP and event.key == K_EQUALS:
+            world.draw_dist += 1
+        if event.type == KEYUP and event.key == K_MINUS:
+            world.draw_dist -= 1
 
     mouse_delta = np.array(pygame.mouse.get_rel())
 
@@ -110,7 +116,7 @@ while running:
         side_spd -= 1
 
     sideways = np.cross((0, 0, 1), forwards)
-    sideways /= np.linalg.norm(sideways)
+    sideways /= length(sideways)
     hor_velocity = np.cross(sideways, (0, 0, 1)) * forward_spd + sideways * side_spd
     hor_velocity *= movement_speed
 
@@ -126,10 +132,11 @@ while running:
 
 
     def collision_at(pos):
+        if pressed[K_f]: return False
         lower_left = np.int_(pos - (.8, .8, 2.2))
         upper_right = np.int_(pos + (.8, .8, .6)) + 1
         for pos in multi_range(lower_left, upper_right):
-            if game_map.is_solid(pos):
+            if game_world.is_solid(pos):
                 return True
         return False
 
@@ -161,7 +168,9 @@ while running:
     glLoadIdentity()
 
     # Render the map
-    game_map.render()
+    game_world.render(position)
 
     # Show the screen
     pygame.display.flip()
+
+sys.exit()
