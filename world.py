@@ -4,7 +4,8 @@ from multiprocessing.queues import SimpleQueue
 import scipy.ndimage
 from OpenGL.GL import *
 from noise import snoise4 as perlin
-
+from OpenGL.arrays import vbo
+from OpenGL.GL import shaders
 from util import *
 
 chunk_size = vec(32, 32, 32)
@@ -12,7 +13,7 @@ chunk_size = vec(32, 32, 32)
 
 land_scale = 300.
 land_height = 100.
-octaves = 6
+octaves = 10
 
 color_scale = 150.
 
@@ -29,11 +30,25 @@ class World(object):
     generating = []
     chunk_queue = SimpleQueue()
 
-    def generate_chunk(self, chunk_loc):
-        self.generating.append(chunk_loc)
-        p = Process(target=self._generate_chunk_process, args=(chunk_loc, self.chunk_queue))
-        p.daemon = True
-        p.start()
+    def ensure_generated(self, chunk_loc):
+        if chunk_loc not in self.chunks:
+            print chunk_loc
+            self.generate_chunk(chunk_loc, other_process=False)
+            if chunk_loc in self.generating:
+                self.generating.remove(chunk_loc)
+
+    def generate_chunk(self, chunk_loc, other_process=True):
+        if other_process:
+            self.generating.append(chunk_loc)
+            p = Process(target=self._generate_chunk_process, args=(chunk_loc, self.chunk_queue))
+            p.daemon = True
+            p.start()
+        else:
+            c = Chunk(chunk_loc)
+            self.chunks[chunk_loc] = c
+            if not c.is_empty:
+                c.redraw()
+                self.nonempty_chunks[chunk_loc] = c
 
     # @staticmethod
     def _generate_chunk_process(self, chunk_loc, output):
@@ -52,14 +67,16 @@ class World(object):
     def render(self, camera_pos):
         while not self.chunk_queue.empty():
             chunk_loc, c = self.chunk_queue.get()
-            self.generating.remove(chunk_loc)
-            self.chunks[chunk_loc] = c
-            if not c.is_empty:
-                c.redraw()
-                self.nonempty_chunks[chunk_loc] = c
-                break
+            if chunk_loc in self.generating:
+                self.generating.remove(chunk_loc)
+                self.chunks[chunk_loc] = c
+                if not c.is_empty:
+                    c.redraw()
+                    self.nonempty_chunks[chunk_loc] = c
+                    break
 
         camera_loc = np.int_(camera_pos / chunk_size)
+        self.ensure_generated(tuple(camera_loc))
 
         if len(self.generating) < 15:
             nearby = multi_range(camera_loc[:2] - draw_dist, camera_loc[:2] + draw_dist + 1)
@@ -142,6 +159,12 @@ class Chunk(object):
         if self.display_list is None:
             self.redraw()
         glCallList(self.display_list)
+
+    def _create_vbo(self):
+        if self.is_empty: return
+
+        if self.vbo is None:
+            self.vbo = vbo.VBO()
 
     def redraw(self):
         if self.is_empty: return
