@@ -16,63 +16,71 @@ octaves = 6
 
 color_scale = 150.
 
-draw_dist = 4
-generate_dist = 4
+draw_dist = 2
+
+
+# generate_dist = 4
 
 
 class World(object):
     chunks = {}
     nonempty_chunks = {}
 
-    generating_chunks = []
-    generated_chunks = SimpleQueue()
+    generating = []
+    chunk_queue = SimpleQueue()
 
     def generate_chunk(self, chunk_loc):
+        self.generating.append(chunk_loc)
+        p = Process(target=self._generate_chunk_process, args=(chunk_loc, self.chunk_queue))
+        p.daemon = True
+        p.start()
+
+    # @staticmethod
+    def _generate_chunk_process(self, chunk_loc, output):
         try:
-            c = Chunk(chunk_loc, self)
-            self.generated_chunks.put((chunk_loc, c))
+            output.put((chunk_loc, Chunk(chunk_loc)))
         except Exception as e:
-            self.generated_chunks.put(e)
+            output.put(e)
 
     def is_solid(self, pos):
-        chunk_loc = np.int_(pos / chunk_size)
+        chunk_loc = to_int(pos / chunk_size)
         chunk = self.chunks.get(tuple(chunk_loc))
         if chunk is None:
             return True
         return chunk.is_solid(pos - chunk_loc * chunk_size)
 
     def render(self, camera_pos):
-        while not self.generated_chunks.empty():
-            chunk_loc, c = self.generated_chunks.get()
-            self.generating_chunks.remove(chunk_loc)
+        while not self.chunk_queue.empty():
+            chunk_loc, c = self.chunk_queue.get()
+            self.generating.remove(chunk_loc)
             self.chunks[chunk_loc] = c
             if not c.is_empty:
+                c.redraw()
                 self.nonempty_chunks[chunk_loc] = c
                 break
 
         camera_loc = np.int_(camera_pos / chunk_size)
 
-        if len(self.generating_chunks) < 3:
-            nearby = multi_range(camera_loc[:2] - generate_dist, camera_loc[:2] + generate_dist + 1)
-            nearby = flatten(map(lambda x: [x + (a,) for a in xrange(-1, 2)], nearby))
-            to_generate = filter(lambda x: x not in self.chunks and x not in self.generating_chunks, nearby)
+        if len(self.generating) < 15:
+            nearby = multi_range(camera_loc[:2] - draw_dist, camera_loc[:2] + draw_dist + 1)
+            nearby = flatten(map(lambda x: [x + (a,) for a in xrange(-2, 2)], nearby))
+            to_generate = filter(lambda x: x not in self.chunks and x not in self.generating, nearby)
             if to_generate:
                 chunk_loc = min(to_generate,
                                 key=lambda x: length_squared(x + vec(.5, .5, .5) - camera_pos / chunk_size))
-                self.generating_chunks.append(chunk_loc)
-                p = Process(target=self.generate_chunk, args=(chunk_loc,))
-                p.daemon = True
-                p.start()
+                self.generate_chunk(chunk_loc)
 
-        for chunk_loc, chunk in self.nonempty_chunks.items():
-            if length_squared(chunk_loc + vec(.5, .5, .5) - camera_pos / chunk_size) < draw_dist * draw_dist:
-                chunk.draw()
+        chunk_locs = np.asarray(self.nonempty_chunks.keys())
+        if chunk_locs.size:
+            centers = chunk_locs * chunk_size + chunk_size / 2
+            in_frustum = frustum_intersects_aabbs(centers, chunk_size)
+            for chunk_loc in chunk_locs[in_frustum]:
+                self.nonempty_chunks[tuple(chunk_loc)].draw()
 
 
 class Chunk(object):
-    def __init__(self, pos, world):
+    def __init__(self, pos):
         self.pos = np.asarray(pos)
-        self.world = world
 
         if self.pos[2] * chunk_size[2] > land_height:
             self.uniform = 0
