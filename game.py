@@ -26,16 +26,16 @@ if __name__ == '__main__':
     # glShadeModel(GL_FLAT)
     glClearColor(1.0, 1.0, 1.0, 0.0)
 
-    glEnable(GL_COLOR_MATERIAL)
-
-    glEnable(GL_LIGHTING)
-    glEnable(GL_LIGHT0)
-    ambient = .8
-    diffuse = .05
-    glLight(GL_LIGHT0, GL_AMBIENT, (ambient,) * 3 + (1,))
-    glLight(GL_LIGHT0, GL_DIFFUSE, (diffuse,) * 3 + (1,))
-    glLight(GL_LIGHT0, GL_SPECULAR, (0, 0, 0, 0))
-    glLight(GL_LIGHT0, GL_POSITION, (0, 0, 1, 0))
+    # glEnable(GL_COLOR_MATERIAL)
+    #
+    # glEnable(GL_LIGHTING)
+    # glEnable(GL_LIGHT0)
+    # ambient = .8
+    # diffuse = .05
+    # glLight(GL_LIGHT0, GL_AMBIENT, (ambient,) * 3 + (1,))
+    # glLight(GL_LIGHT0, GL_DIFFUSE, (diffuse,) * 3 + (1,))
+    # glLight(GL_LIGHT0, GL_SPECULAR, (0, 0, 0, 0))
+    # glLight(GL_LIGHT0, GL_POSITION, (0, 0, 1, 0))
 
     clock = pygame.time.Clock()
 
@@ -44,9 +44,10 @@ if __name__ == '__main__':
 
     # This object renders the 'map'
     game_world = World()
+    world.Chunk.create_shaders()
 
     # Starting player pos
-    position = vec(0.0, 0.0, world.land_height)
+    position = vec(0.0, 0.0, world.cheat_height)
     velocity = vec(0.0, 0.0, 0.0)
     gravity = vec(0.0, 0.0, -20.0)
 
@@ -88,9 +89,9 @@ if __name__ == '__main__':
             if event.type == KEYUP and event.key == K_p:
                 print position
             if event.type == KEYUP and event.key == K_EQUALS:
-                world.draw_dist += 1
+                world.generate_dist += 1
             if event.type == KEYUP and event.key == K_MINUS:
-                world.draw_dist -= 1
+                world.generate_dist -= 1
 
         mouse_delta = np.array(pygame.mouse.get_rel())
 
@@ -105,10 +106,51 @@ if __name__ == '__main__':
         if facing[1] < -1.5: facing[1] = -1.5
         forwards = np.array((cos(facing[0]) * cos(facing[1]), sin(facing[0]) * cos(facing[1]), sin(facing[1])))
 
+
+        # Move camera
+        old_pos = position.copy()
+        position += velocity * time_passed_seconds
+        velocity += gravity * time_passed_seconds
+
+        # Collisions
+        def collision_at(pos):
+            if pressed[K_f]: return False
+            lower_left = to_int(pos - (.8, .8, 2.2))
+            upper_right = to_int(pos + (.8, .8, .6)) + 1
+            for pos in multi_range(lower_left, upper_right):
+                game_world.ensure_generated(pos)
+                if game_world.is_solid(pos):
+                    return True
+            return False
+
+        onGround = collision_at(position - (0, 0, .01))
+
+        if collision_at(position):
+            step_up = onGround and not collision_at(position + (0, 0, 1))
+            movement = position - old_pos
+            position = old_pos
+            if collision_at(position):
+                position += movement
+            else:
+                # if step_up:
+                    # movement += (0, 0, 1)
+                for dim in 2, 1, 0:
+                    steps = 4
+                    step = vec(0.0, 0.0, 0.0)
+                    step[dim] = movement[dim]
+                    if not collision_at(position + step):
+                        position += step
+                        break
+                    velocity[dim] = 0
+                    for _ in xrange(steps):
+                        step *= .5
+                        if not collision_at(position + step):
+                            position += step
+
         # Calculate movement
         movement_speed = 10.0
         if pressed[K_LSHIFT]:
-            movement_speed = 30.0
+            movement_speed = 50.0
 
         forward_spd, side_spd = 0, 0
         if pressed[K_w] or pressed[K_UP]:
@@ -127,41 +169,8 @@ if __name__ == '__main__':
 
         velocity[:2] = hor_velocity[:2]
 
-        if pressed[K_SPACE]:
+        if pressed[K_SPACE] and (onGround or pressed[K_LSHIFT]):
             velocity[2] = movement_speed
-
-        # Move camera
-        old_pos = position.copy()
-        position += velocity * time_passed_seconds
-        velocity += gravity * time_passed_seconds
-
-
-        def collision_at(pos):
-            if pressed[K_f]: return False
-            lower_left = to_int(pos - (.8, .8, 2.2))
-            upper_right = to_int(pos + (.8, .8, .6)) + 1
-            for pos in multi_range(lower_left, upper_right):
-                if game_world.is_solid(pos):
-                    return True
-            return False
-
-
-        if collision_at(position):
-            movement = position - old_pos
-            position = old_pos
-            if collision_at(position):
-                position += movement
-            else:
-                for dim in 0, 1, 2:
-                    steps = 10
-                    step = [0, 0, 0]
-                    step[dim] = movement[dim] / steps
-                    for _ in xrange(steps):
-                        if not collision_at(position + step):
-                            position += step
-                        else:
-                            velocity[dim] = 0
-                            break
 
         # Update the OpenGL window
         glViewport(0, 0, SCREEN_SIZE[0], SCREEN_SIZE[1])
