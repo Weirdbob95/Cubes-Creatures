@@ -1,15 +1,12 @@
-import math
 import time
-from multiprocessing import Process
+from multiprocessing import Pool
 from multiprocessing import cpu_count
-from multiprocessing.queues import SimpleQueue
 
 import scipy.ndimage
 from OpenGL.GL import *
 from OpenGL.GL import shaders
 from OpenGL.arrays import vbo
 from noise import snoise4 as perlin
-import random
 
 from util import *
 
@@ -19,26 +16,30 @@ from util import *
 #
 # color_scale = 150.
 
-land_scale = 500.
+land_scale = 1000.
 land_height = 200.
-octaves = 7
+land_octaves = 7
 
-color_scale = 300.
+color_scale = 800.
+color_octaves = 1
 
 generate_dist = 2
 cheat_height = land_height * .5
 
+# chunk_size = vec(256, 256, 256)
 chunk_size = vec(64, 64, 64)
-z_band = int(math.ceil(cheat_height / chunk_size[2]))
+# z_band = int(math.ceil(cheat_height / chunk_size[2]))
 chunk_zoom = 4
 
 
 class World(object):
-    chunks = {}
-    nonempty_chunks = set()
-    generating = set()
-    generate_next = set()
-    chunk_queue = SimpleQueue()
+    def __init__(self):
+        self.chunks = {}
+        self.nonempty_chunks = set()
+        self.generating = set()
+        self.generate_next = set()
+        self.process_pool = Pool(max(1, cpu_count() - 1))
+        self.results = set()
 
     def _add_chunk(self, c, chunk_loc):
         self.chunks[chunk_loc] = c
@@ -61,20 +62,10 @@ class World(object):
             self.generate_next.remove(chunk_loc)
         if other_process:
             self.generating.add(chunk_loc)
-            p = Process(target=self._generate_chunk_process, args=(chunk_loc, self.chunk_queue))
-            p.daemon = True
-            p.start()
+            self.results.add(self.process_pool.apply_async(
+                func=_generate_chunk_process, args=(chunk_loc,)))
         else:
             self._add_chunk(Chunk(chunk_loc), chunk_loc)
-
-
-    # @staticmethod
-    def _generate_chunk_process(self, chunk_loc, output):
-        try:
-            output.put((chunk_loc, Chunk(chunk_loc)))
-        except Exception as e:
-            output.put(e)
-            print e
 
     def is_solid(self, pos):
         chunk_loc = to_int(pos / chunk_size)
@@ -84,30 +75,23 @@ class World(object):
         return chunk.is_solid(pos - chunk.world_pos)
 
     def render(self, camera_pos):
-        # if random.random() < .1:
-        #     print self.generating, self.generate_next, self.nonempty_chunks
+        ready_results = filter(lambda x: x.ready(), self.results)
+        self.results = set(filter(lambda x: not x.ready(), self.results))
+        for result in ready_results:
+            chunk_loc, c = result.get()
+            if chunk_loc in self.generating:
+                self.generating.remove(chunk_loc)
+                self._add_chunk(c, chunk_loc)
 
-        while not self.chunk_queue.empty():
-            x = self.chunk_queue.get()
-            if x is Exception:
-                raise x
-            else:
-                chunk_loc, c = x
-                if chunk_loc in self.generating:
-                    self.generating.remove(chunk_loc)
-                    self._add_chunk(c, chunk_loc)
-
-        # camera_loc = np.int_(camera_pos / chunk_size)
         self.ensure_generated(camera_pos)
 
         if len(self.generating) < max(1, cpu_count() - 1):
-            # nearby = multi_range(camera_loc[:2] - generate_dist, camera_loc[:2] + generate_dist + 1)
-            # nearby = flatten(map(lambda x: [x + (a,) for a in xrange(-z_band, z_band)], nearby))
-            # to_generate = filter(lambda x: x not in self.chunks and x not in self.generating, nearby)
             if self.generate_next:
                 chunk_loc = min(self.generate_next,
                                 key=lambda x: length_squared(x + vec(.5, .5, .5) - camera_pos / chunk_size))
-                self._generate_chunk(chunk_loc)
+                if length_squared(chunk_loc + vec(.5, .5,
+                                                  .5) - camera_pos / chunk_size) < generate_dist * generate_dist:
+                    self._generate_chunk(chunk_loc)
 
         chunk_locs = np.asarray(list(self.nonempty_chunks))
         if chunk_locs.size:
@@ -124,7 +108,7 @@ class Chunk(object):
 
         if self.pos[2] * chunk_size[2] > cheat_height:
             self.uniform = 0
-        elif (self.pos[2] + 1) * chunk_size[2] < -cheat_height:
+        elif (self.pos[2] + 1) * chunk_size[2] < 0:  # -cheat_height:
             self.uniform = 1
         else:
             t = time.clock()
@@ -135,9 +119,9 @@ class Chunk(object):
             self.solid = calculate_solid(chunk_grid)
             self.solid = scipy.ndimage.zoom(self.solid, (chunk_size + chunk_zoom + 1.1) / (chunk_size / chunk_zoom + 2),
                                             order=1) > 0
-            self.solid = self.solid[:chunk_size[0]+2, :chunk_size[1]+2, :chunk_size[2]+2]
+            self.solid = self.solid[:chunk_size[0] + 2, :chunk_size[1] + 2, :chunk_size[2] + 2]
             # print chunk_grid.shape, self.solid.shape
-            print 'Calculating solid:', time.clock() - t
+            # print 'Calculating solid:', time.clock() - t
 
             if np.all(self.solid == 0):
                 self.uniform = 0
@@ -161,11 +145,11 @@ class Chunk(object):
         self.visible = []
         for pos in np.transpose(np.nonzero(interesting)):
             world_pos = self.world_pos + pos - 1
-            col = (perlin(0, *world_pos / color_scale, octaves=octaves) / 2 + .5,
-                   perlin(1, *world_pos / color_scale, octaves=octaves) / 2 + .5,
-                   perlin(2, *world_pos / color_scale, octaves=octaves) / 2 + .5)
+            col = (perlin(0, *world_pos / color_scale, octaves=color_octaves) / 2 + .5,
+                   perlin(1, *world_pos / color_scale, octaves=color_octaves) / 2 + .5,
+                   perlin(2, *world_pos / color_scale, octaves=color_octaves) / 2 + .5)
             self.visible.append((pos - 1, col))
-        print 'Calculating visible:', time.clock() - t
+        # print 'Calculating visible:', time.clock() - t
 
         if not self.visible:
             self.is_empty = True
@@ -175,9 +159,10 @@ class Chunk(object):
         t = time.clock()
         self.vbo_data = []
         for pos, col in self.visible:
+            # if random.random() < .1:
             self.vbo_data += self._cube_data(pos, col)
         self.vbo_data = np.fromiter(chain.from_iterable(self.vbo_data), dtype=np.float32)
-        print 'Creating vbo data:', time.clock() - t
+        # print 'Creating vbo data:', time.clock() - t
 
         self.vbo = None
 
@@ -192,15 +177,16 @@ class Chunk(object):
     @staticmethod
     def create_shaders():
         vertex_shader = shaders.compileShader("""
-            varying vec4 vertex_color;
+            float end_fog = 1000.0;
+            vec4 fog_color = vec4(0, .5, 1, 1);
             void main() {
-                gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
-                vertex_color = gl_Color;
+                gl_Position = ftransform();
+                float fog = clamp((end_fog - abs(gl_Position.z))/end_fog, 0, 1);
+                gl_FrontColor = mix(fog_color, gl_Color, fog);
             }""", GL_VERTEX_SHADER)
         fragment_shader = shaders.compileShader("""
-            varying vec4 vertex_color;
             void main() {
-                gl_FragColor = vertex_color;
+                gl_FragColor = gl_Color;
             }""", GL_FRAGMENT_SHADER)
         Chunk.shader = shaders.compileProgram(vertex_shader, fragment_shader)
 
@@ -255,8 +241,12 @@ class Chunk(object):
         return data
 
 
+def _generate_chunk_process(chunk_loc):
+    return chunk_loc, Chunk(chunk_loc)
+
+
 calculate_solid_1 = np.vectorize(lambda x, y, z: - z * land_scale / land_height +
-                                                 perlin(-1, x, y, z, octaves=octaves))
+                                                 perlin(-1, x, y, z, octaves=land_octaves))
 
 
 def calculate_solid(pos):
